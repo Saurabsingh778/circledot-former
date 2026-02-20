@@ -29,7 +29,7 @@ from torchdiffeq import odeint_adjoint as odeint
 from torch_geometric.nn import GATv2Conv, global_mean_pool, global_max_pool
 import numpy as np
 
-from train_fast import NUCLEOTIDE_MAP, HelicalGNNFrontend, HelicalDynamicsFunc, ContinuousODEBlock
+from model import NUCLEOTIDE_MAP, HelicalGNNFrontend, HelicalDynamicsFunc, ContinuousODEBlock
 
 SPLIT_DIR    = "./splits"
 BEST_WEIGHTS = "circledot_classifier_best.pth"
