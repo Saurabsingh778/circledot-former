@@ -98,7 +98,8 @@ data/
 
 ```
 circledot-former/
-├── train_fast.py          # GPU-optimised Phase 1 pre-training (C₀ regression)
+├── Model.py          # GPU-optimised Phase 1 pre-training (C₀ regression)
+|__train.py 
 ├── prepare_split.py       # Deterministic 70/15/15 stratified split (seed 42)
 ├── fine_tune.py           # Phase 2 classification fine-tuning (frozen backbone)
 ├── final_beanch_mark.py   # Sealed test-set evaluation (run exactly once)
@@ -154,7 +155,7 @@ python prepare_split.py
 
 **Step 2 — Phase 1: Pre-train on C₀ cyclizability regression**
 ```bash
-python train_fast.py
+python train.py
 # Output: circledot_former_loopseq_weights.pth
 # Expected: Val MSE ≈ 0.132 after 55 epochs
 ```

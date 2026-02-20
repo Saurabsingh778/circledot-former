@@ -13,7 +13,7 @@ from torch_geometric.loader import DataLoader
 from torch_geometric.data import Data
 from torch.utils.data import Dataset as TorchDataset
 
-from train_fast import (CircleDotFormer, NUCLEOTIDE_MAP,
+from model import (CircleDotFormer, NUCLEOTIDE_MAP,
                         HelicalGNNFrontend, HelicalDynamicsFunc, ContinuousODEBlock)
 
 import pandas as pd
