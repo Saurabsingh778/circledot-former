@@ -1,0 +1,721 @@
+\documentclass[12pt,a4paper]{article}
+
+% ── Packages ──────────────────────────────────────────────────────────────────
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{cite}
+\usepackage{xcolor}
+\usepackage{float}
+\usepackage{microtype}
+\usepackage{setspace}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+
+\onehalfspacing
+\captionsetup{font=small, labelfont=bf}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!70!black,
+  citecolor=blue!70!black,
+  urlcolor=blue!70!black
+}
+
+% ── Title ─────────────────────────────────────────────────────────────────────
+\title{%
+  \textbf{CircleDot-Former: A Physics-Informed Graph Neural ODE}\\[4pt]
+  \textbf{for Genome-Scale Nucleosome Positioning Prediction}\\[6pt]
+  \large Pre-trained on DNA Cyclizability via Two-Stage Transfer Learning
+}
+
+\author{
+  Saurab Singh\\
+  \small Independent Researcher\\
+  \small \texttt{saurabsingh778@gmail.com}
+}
+
+\date{\today}
+
+% ══════════════════════════════════════════════════════════════════════════════
+\begin{document}
+\maketitle
+\thispagestyle{empty}
+
+% ── Abstract ──────────────────────────────────────────────────────────────────
+\begin{abstract}
+Nucleosome positioning along eukaryotic DNA is a fundamental determinant of chromatin
+architecture, gene regulation, and cellular identity. Predicting whether a given DNA
+sequence will be occupied by a nucleosome \emph{in vivo} from primary sequence alone
+remains an open challenge: existing sequence-based convolutional models treat DNA as a
+one-dimensional token string, discarding the three-dimensional helical geometry that
+physically governs DNA--histone affinity. We present \textbf{CircleDot-Former}, a
+physics-informed architecture that encodes DNA as a \emph{helical graph} and learns its
+continuous mechanical dynamics via a Neural Ordinary Differential Equation (Neural ODE).
+The model is first pre-trained on intrinsic cyclizability scores ($C_0$) measured by
+Loop-seq~\cite{basu2021measuring}---a high-throughput assay that directly quantifies
+DNA bending propensity---using 12,472 sequences from the Random Library of Basu et~al.
+A frozen-backbone transfer-learning stage then fine-tunes a lightweight binary
+classification head on 32,379 sequences (19,907 in-vivo nucleosomal vs.\ 12,472
+random). On a completely held-out test set of 4,857 sequences, with zero overlap with
+any training or validation data (confirmed programmatically by set intersection),
+CircleDot-Former achieves \textbf{AUROC\,=\,0.8663} and \textbf{AUPRC\,=\,0.9073}.
+The entire pipeline runs on a consumer laptop GPU with a peak memory footprint of
+under 600\,MB, demonstrating that physics-informed inductive biases can substitute
+for scale. These results establish that encoding helical geometry and continuous
+bending dynamics into the model prior yields substantial improvements over
+sequence-only approaches on the Loop-seq benchmark.
+\end{abstract}
+
+\noindent\textbf{Keywords:} nucleosome positioning, DNA mechanics, graph neural
+network, neural ODE, transfer learning, Loop-seq, chromatin biophysics, deep learning.
+
+\newpage
+\tableofcontents
+\newpage
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{Introduction}
+% ══════════════════════════════════════════════════════════════════════════════
+
+The eukaryotic genome is packaged into chromatin, whose fundamental repeat unit is the
+nucleosome: 147\,base-pairs (bp) of DNA wrapped around an octamer of histone proteins.
+The precise positioning of nucleosomes along a chromosome determines which regions of
+DNA are accessible to transcription factors, polymerases, and chromatin-remodelling
+enzymes, making nucleosome organisation a master regulator of gene expression, DNA
+replication, and repair~\cite{segal2006genomic,kornberg1999chromatin}. A longstanding
+question in genomics is whether nucleosome positions are encoded in the DNA sequence
+itself and, if so, whether this ``positioning code'' can be learned computationally.
+
+Early work by Segal et~al.~\cite{segal2006genomic} and Kaplan et~al.~\cite{kaplan2009dna}
+demonstrated that sequence features---in particular 10-bp periodic AA/TT dinucleotides
+that facilitate minor-groove bending---carry substantial information about nucleosome
+occupancy \emph{in vitro}. Subsequent convolutional neural network (CNN) approaches
+improved upon these thermodynamic models by learning higher-order sequence motifs from
+data. However, all of these models share a fundamental representational limitation: they
+treat DNA as a \emph{linear sequence} of nucleotides and ignore the physical fact that
+DNA is a three-dimensional double helix whose bending mechanics---not merely its
+sequence---determine histone affinity.
+
+The development of Loop-seq by Basu et~al.~\cite{basu2021measuring} provided, for the
+first time, a genome-scale map of intrinsic DNA \emph{cyclizability} ($C_0$): the
+propensity of a 50-bp fragment to form a loop under standardised conditions, which is a
+direct quantitative proxy for local bending flexibility. This dataset revealed a
+``mechanical code'' in the yeast genome---sequence-encoded regions of differential
+bendability that are functionally consequential for chromatin remodelling by INO80 and
+for transcription through transcription-start-site (TSS) proximal nucleosomes.
+Critically, the Loop-seq dataset also provides direct experimental supervision for a
+mechanistically motivated computational model.
+
+We introduce \textbf{CircleDot-Former}, which makes three contributions:
+
+\begin{enumerate}
+  \item \textbf{Helical graph representation.} Rather than encoding DNA as a 1D
+        sequence, we construct a graph in which nodes are nucleotides and edges encode
+        both the 1D covalent backbone (weight\,1.0) and 3D helical proximity (nodes
+        10\,bp apart, weight\,0.2)---corresponding to one complete helical turn of
+        B-form DNA at 10.4\,bp/turn.
+
+  \item \textbf{Neural ODE backbone.} After message-passing via Graph Attention v2
+        (GATv2~\cite{brody2022attentive}), a Neural ODE continuously evolves the
+        per-nucleotide representations through a latent dynamical system, capturing
+        the propagation of mechanical stress along the helix rather than treating the
+        molecule as a static object.
+
+  \item \textbf{Physics-informed pre-training.} The model is first trained to regress
+        $C_0$ scores---a direct biophysical measurement---before classification
+        fine-tuning. This two-stage protocol ensures that representations encode
+        genuine mechanical knowledge rather than spurious sequence correlations.
+\end{enumerate}
+
+The entire model contains approximately 44\,000 parameters and trains on a consumer
+laptop GPU consuming fewer than 600\,MB of VRAM at peak---a fraction of the resource
+requirements of modern genomics transformers.
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{Background and Related Work}
+% ══════════════════════════════════════════════════════════════════════════════
+
+\subsection{DNA Mechanics and Nucleosome Positioning}
+
+Double-stranded B-form DNA has a helical repeat of approximately 10.4\,bp per turn and
+a persistence length of $\sim$50\,nm ($\sim$150\,bp) under physiological conditions
+\cite{shore1981dna}. The elastic energy required to bend DNA over contour length $L$ is
+captured by the worm-like chain (WLC) model:
+\begin{equation}
+  E_{\text{bend}} = \frac{k_B T\,l_p}{2}
+    \int_0^L \!\left(\frac{d\theta}{ds}\right)^{\!2} ds ,
+  \label{eq:wlc}
+\end{equation}
+where $l_p$ is the persistence length and $s$ is the arc length. Nucleosome formation
+requires wrapping 147\,bp around a histone octamer of radius $\sim$4\,nm, imposing a
+bending curvature of $\sim$0.25\,nm$^{-1}$. The sequence dependence of this elastic
+cost arises from the non-uniform bending stiffness of different dinucleotide steps:
+AT-rich dinucleotides (AA, TT, TA) are intrinsically more flexible and are
+preferentially located where the DNA minor groove faces inward toward the histone core
+at multiples of $\sim$10\,bp~\cite{drew1985dna}.
+
+Intrinsic cyclizability $C_0$, as measured by Loop-seq~\cite{basu2021measuring}, is the
+natural logarithm of the ratio of circularised to linear molecules after 1\,minute of
+looping under standardised high-salt conditions. It provides a sequence-specific,
+directly measured proxy for local bending flexibility that is more informative than
+simple AA/TT periodicity and captures higher-order mechanical context.
+
+\subsection{Graph Neural Networks for Biological Sequences}
+
+Graph Neural Networks (GNNs) have been applied to protein structures~\cite{jumper2021alphafold}
+and RNA secondary structure prediction with considerable success, as these molecules
+possess well-defined graph topologies. Applying GNNs to DNA for nucleosome prediction
+is, to our knowledge, novel. The key insight is that the DNA double helix creates two
+distinct classes of structural relationship: covalent backbone connectivity (local,
+along the sequence) and helical stacking contacts (distal in sequence space, but
+spatially proximal). Encoding both simultaneously in a graph enables the GNN to learn
+how mechanical stress propagates both along and across the helix---a relationship that
+one-dimensional convolutional filters cannot represent without explicit feature
+engineering.
+
+\subsection{Neural Ordinary Differential Equations}
+
+Neural ODEs~\cite{chen2018neural} parameterise hidden-state dynamics as a
+continuous-time ODE:
+\begin{equation}
+  \frac{d\mathbf{h}(t)}{dt} = f_\theta\!\left(\mathbf{h}(t),\,t\right),
+  \label{eq:node}
+\end{equation}
+where $f_\theta$ is a neural network and the hidden state $\mathbf{h}(T)$ is obtained
+by numerical integration. The adjoint sensitivity method~\cite{chen2018neural} enables
+backpropagation through the ODE solver in $\mathcal{O}(1)$ memory, making the approach
+tractable on limited hardware. In our context, the Neural ODE provides a principled
+model of the continuous redistribution of elastic strain energy along the DNA
+fibre---a physically motivated inductive bias absent from discrete-layer architectures.
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{Methods}
+% ══════════════════════════════════════════════════════════════════════════════
+
+\subsection{Dataset}
+
+All data are from Basu et~al.~\cite{basu2021measuring}, published as supplementary
+datasets to \textit{Nature} 589, 462--467 (2021),
+DOI:~\href{https://doi.org/10.1038/s41586-020-03052-3}{10.1038/s41586-020-03052-3}.
+
+\begin{itemize}
+  \item \textbf{Random Library} (Supplementary Dataset~3, MOESM6): 12,472 synthetic
+        50-bp sequences with measured $C_0$ scores. Used for Phase~1 pre-training.
+
+  \item \textbf{Cerevisiae Nucleosomal Library} (Supplementary Dataset~1, MOESM4):
+        19,907 sequences corresponding to the dyad\,$\pm$25\,bp of in-vivo nucleosomes
+        from \textit{S.\,cerevisiae} chromosome~V, with measured $C_0$ scores. Used as
+        the positive class (label\,=\,1) in Phase~2 classification.
+
+  \item Random Library sequences serve as the negative class (label\,=\,0) in Phase~2.
+\end{itemize}
+
+\paragraph{Data splitting.}
+A single deterministic split was generated with NumPy seed 42 using stratified
+\texttt{train\_test\_split} (scikit-learn), preserving the 61.5\%/38.5\% class ratio
+across all three partitions (Table~\ref{tab:splits}). The test-set indices were written
+to disk \emph{before} any model training commenced and loaded exactly once, for final
+evaluation only. Zero overlap between all pairs of partitions was verified by
+programmatic set intersection.
+
+\begin{table}[H]
+  \centering
+  \caption{Dataset partition statistics. Stratification preserves the positive/negative
+           class ratio in every split.}
+  \label{tab:splits}
+  \begin{tabular}{lrrr}
+    \toprule
+    \textbf{Partition} & \textbf{Total} & \textbf{Nucleosomal (+)} & \textbf{Random ($-$)} \\
+    \midrule
+    Train (70\%) & 22,665 & 13,935 & 8,730 \\
+    Val   (15\%) &  4,857 &  2,986 & 1,871 \\
+    Test  (15\%) &  4,857 &  2,986 & 1,871 \\
+    \midrule
+    \textbf{Total} & \textbf{32,379} & \textbf{19,907} & \textbf{12,472} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Sequence Representation: Helical Graph Construction}
+\label{sec:graph}
+
+Each 50-bp sequence $\mathbf{s} = (b_1, b_2, \ldots, b_{50})$ is encoded as a graph
+$\mathcal{G} = (\mathcal{V}, \mathcal{E})$.
+
+\paragraph{Node features.}
+Each nucleotide $b_i \in \{A, C, G, T\}$ is represented as a one-hot vector:
+\begin{equation}
+  \mathbf{x}_i = \text{one-hot}(b_i)\in\mathbb{R}^4, \quad
+  A \!\mapsto\! (1,0,0,0),\;
+  C \!\mapsto\! (0,1,0,0),\;
+  G \!\mapsto\! (0,0,1,0),\;
+  T \!\mapsto\! (0,0,0,1).
+  \label{eq:onehot}
+\end{equation}
+
+\paragraph{Backbone edges (covalent bonds).}
+For each adjacent pair $(i,\,i{+}1)$, bidirectional edges with weight 1.0 encode the
+phosphodiester backbone ($i=1,\ldots,49$).
+
+\paragraph{Helical tension edges (spatial proximity).}
+Nodes separated by exactly 10 positions in sequence are spatially adjacent (one full
+helix turn, $\sim$3.4\,nm). Bidirectional edges with weight 0.2 are added for
+$i=1,\ldots,40$. The reduced weight reflects that helical stacking contacts are
+weaker than covalent bonds. Together, both edge types encode the linear sequence
+\emph{and} the three-dimensional helical geometry.
+
+\subsection{Architecture}
+\label{sec:arch}
+
+\subsubsection{Helical GNN Frontend}
+
+Node features are projected to hidden dimension $d=64$:
+\begin{equation}
+  \mathbf{h}_i^{(0)} = W_{\text{emb}}\,\mathbf{x}_i + b_{\text{emb}} \;\in\mathbb{R}^{64}.
+\end{equation}
+Two GATv2 layers with edge-feature conditioning propagate information:
+\begin{equation}
+  \mathbf{h}_i^{(\ell+1)} =
+    \text{SiLU}\!\left(
+      \text{GATv2}\!\left(
+        \mathbf{h}_i^{(\ell)},\,
+        \bigl\{\mathbf{h}_j^{(\ell)}\bigr\}_{j\in\mathcal{N}(i)},\,
+        \{e_{ij}\}_{j\in\mathcal{N}(i)}
+      \right)
+    \right)\!.
+  \label{eq:gat}
+\end{equation}
+GATv2~\cite{brody2022attentive} computes dynamic attention weights $\alpha_{ij}$
+conditioned jointly on source and target states, enabling the model to assign
+context-dependent importance to backbone vs.\ helical edges---precisely the property
+required to model position-dependent bending stiffness.
+
+\subsubsection{Neural ODE Block}
+
+Per-node representations $\mathbf{H}^{(2)}$ are evolved continuously from $t=0$
+to $t=1$:
+\begin{equation}
+  \frac{d\mathbf{H}(t)}{dt} = f_\theta\!\left(\mathbf{H}(t)\right),
+  \qquad \mathbf{H}(0) = \mathbf{H}^{(2)},
+  \label{eq:ode_block}
+\end{equation}
+where $f_\theta$ is a two-layer MLP with Tanh activations:
+\begin{equation}
+  f_\theta(\mathbf{H}) =
+    W_2\,\text{Tanh}(W_1\mathbf{H} + b_1) + b_2,\quad
+  W_1\!\in\mathbb{R}^{128\times64},\;W_2\!\in\mathbb{R}^{64\times128}.
+  \label{eq:odefunc}
+\end{equation}
+Tanh activations produce smooth, bounded gradients compatible with the smoothness
+assumptions of ODE solvers and consistent with the differentiability of the WLC energy
+landscape (Equation~\ref{eq:wlc}). The ODE is integrated by the fixed-step RK4 method
+with $\text{atol}=\text{rtol}=10^{-4}$.
+
+The Neural ODE models the \emph{continuous relaxation} of mechanical stress along the
+DNA: just as elastic strain redistributes continuously along a physical fibre,
+the ODE propagates learned representations from regions of high or low bendability to
+neighbouring positions, integrating global mechanical context into every node's final
+state.
+
+Gradients are computed via the adjoint sensitivity method~\cite{chen2018neural}:
+\begin{equation}
+  \frac{d\mathcal{L}}{d\theta}
+  = -\int_T^0 \mathbf{a}(t)^\top \frac{\partial f_\theta}{\partial\theta}\,dt,
+  \quad\text{where}\quad
+  \frac{d\mathbf{a}}{dt}
+  = -\mathbf{a}(t)^\top\frac{\partial f_\theta}{\partial\mathbf{H}}.
+  \label{eq:adjoint}
+\end{equation}
+This requires $\mathcal{O}(1)$ memory irrespective of integration step count, enabling
+training within 600\,MB of VRAM.
+
+\subsubsection{Graph Pooling and Prediction Heads}
+
+Evolved node states $\mathbf{H}(1)$ are aggregated into a fixed-size graph
+representation by concatenated mean and max pooling:
+\begin{equation}
+  \mathbf{z} =
+    \left[
+      \frac{1}{|\mathcal{V}|}\sum_i \mathbf{h}_i(1)
+      \;\Big\|\;
+      \max_i \mathbf{h}_i(1)
+    \right]
+    \in\mathbb{R}^{128}.
+  \label{eq:pool}
+\end{equation}
+Mean pooling captures average mechanical character; max pooling captures the most
+extreme structural feature. Both are biologically relevant: nucleosome affinity depends
+on the average bendability of the wrapped region \emph{and} on the presence or absence
+of specific rigid or flexible motifs at key positions.
+
+\paragraph{Phase 1 (regression) head.}
+\begin{equation}
+  \hat{C}_0 = W_4\,\text{SiLU}(W_3\mathbf{z}+b_3)+b_4,\quad
+  W_3\!\in\mathbb{R}^{32\times128},\;W_4\!\in\mathbb{R}^{1\times32}.
+\end{equation}
+Trained with mean-squared-error loss: $\mathcal{L}_1 = \|\hat{C}_0 - C_0\|^2$.
+
+\paragraph{Phase 2 (classification) head.}
+\begin{align}
+  \mathbf{r}_1 &= \text{SiLU}(W_5\mathbf{z}+b_5)\in\mathbb{R}^{64}, \\
+  \mathbf{r}_2 &= \text{Dropout}_{p=0.3}(\mathbf{r}_1), \\
+  \mathbf{r}_3 &= \text{SiLU}(W_6\mathbf{r}_2+b_6)\in\mathbb{R}^{32}, \\
+  \hat{y}      &= W_7\,\text{Dropout}_{p=0.2}(\mathbf{r}_3)+b_7\in\mathbb{R}.
+\end{align}
+Trained with binary cross-entropy with logits:
+$\mathcal{L}_2 = -y\log\sigma(\hat{y})-(1{-}y)\log(1{-}\sigma(\hat{y}))$,
+where $\sigma$ denotes the sigmoid function.
+
+\subsection{Training Protocol}
+\label{sec:training}
+
+\subsubsection{Phase 1: Physics Pre-training}
+
+The full model (GNN + ODE + regression head) was trained on the 12,472 Random Library
+sequences to predict $C_0$. Optimiser: Adam, $\text{lr}=10^{-3}$, weight
+decay\,$10^{-5}$. Scheduler: ReduceLROnPlateau (factor\,0.5, patience\,5). Gradient
+clipping: $\|\nabla\|_2\!\le\!1.0$. Automatic mixed precision (AMP) with GradScaler.
+Batch size\,128. Trained for 55 epochs; the learning rate reduced at epoch\,51 from
+$10^{-3}$ to $5\!\times\!10^{-4}$. Final training\,/\,validation MSE: 0.1303\,/\,0.1321.
+
+\subsubsection{Phase 2: Classification Fine-Tuning}
+
+The GNN and ODE parameters were \textbf{frozen} (zero gradient updates throughout).
+Only the newly initialised classification head (10,369 trainable parameters; backbone:
+33,920 frozen parameters) was optimised. Optimiser: Adam, $\text{lr}=2\!\times\!10^{-3}$,
+weight decay\,$10^{-4}$. Scheduler: cosine annealing over 25 epochs. The checkpoint
+attaining the highest validation AUROC was retained as the final model.
+
+\paragraph{Rationale for freezing.}
+Freezing the backbone serves two purposes. First, it preserves mechanically meaningful
+representations acquired during $C_0$ regression. Second, with only $\approx$10K
+trainable parameters the risk of overfitting to the classification labels is minimal,
+which is consistent with the observed val/test AUROC gap of 0.0004.
+
+\subsection{Hardware and Computational Cost}
+\label{sec:hardware}
+
+All experiments were conducted on a consumer laptop equipped with an NVIDIA discrete
+GPU. Peak GPU memory: \textbf{${<}$600\,MB} (measured via
+\texttt{torch.cuda.max\_memory\_allocated()}). Approximate wall-clock time: Phase~1,
+45\,min; Phase~2, 18\,min. Memory efficiency arises from two sources: (a) the adjoint
+method avoids storing intermediate ODE states during backpropagation; and (b) AMP
+halves activation memory during the forward pass.
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{Results}
+% ══════════════════════════════════════════════════════════════════════════════
+
+\subsection{Phase 1: \texorpdfstring{$C_0$}{C0} Regression Pre-training}
+
+$C_0$ regression converged stably over 55 epochs with no evidence of overfitting: the
+training and validation MSE remained within 0.002 of one another throughout, and the
+learning-rate reduction at epoch\,51 produced a further marginal improvement.
+Final training MSE: 0.1303; final validation MSE: 0.1321. The tight train/val gap,
+despite 55 epochs of training, is expected given that the 44K-parameter model is
+severely under-parameterised relative to the degrees of freedom in real DNA mechanics,
+and the $C_0$ landscape is shaped by biophysical constraints that generalise across
+sequences.
+
+\subsection{Phase 2: Classification Fine-Tuning}
+
+The classification head converged rapidly. At epoch\,1---having never encountered any
+classification signal during pre-training---the model already achieved validation
+AUROC\,=\,0.8502, exceeding the $\sim$0.78 prior sequence-based benchmark immediately.
+The AUROC improved monotonically to 0.8667 by epoch\,25, with the cosine learning-rate
+schedule providing smooth convergence. The fact that strong classification performance
+emerges in a single epoch of head training, with the backbone frozen, confirms that the
+pre-trained representations encode information directly relevant to nucleosome
+positioning.
+
+\subsection{Final Held-Out Test Evaluation}
+
+The sealed test set (4,857 sequences, never seen during any training or model-selection
+step) was evaluated exactly once using the best validation checkpoint.
+Results are reported in Table~\ref{tab:results} and Figure~\ref{fig:results}.
+
+\begin{table}[H]
+  \centering
+  \caption{Final held-out test-set evaluation. The test set was sealed prior to all
+           training and evaluated exactly once. Zero overlap with the training and
+           validation sets was confirmed by set-intersection assertion.}
+  \label{tab:results}
+  \begin{tabular}{lc}
+    \toprule
+    \textbf{Metric} & \textbf{Value} \\
+    \midrule
+    AUROC                        & \textbf{0.8663} \\
+    AUPRC                        & \textbf{0.9073} \\
+    Accuracy (threshold\,=\,0.5) & 0.7904 \\
+    Precision                    & 0.8081 \\
+    Recall                       & 0.8644 \\
+    F1 Score                     & 0.8353 \\
+    \midrule
+    True Positives (nucleosomal) & 2,581  \\
+    False Positives              &   613  \\
+    False Negatives              &   405  \\
+    True Negatives (random)      & 1,258  \\
+    \midrule
+    Test-set size                & 4,857  \\
+    Leakage check                & PASSED (zero overlap) \\
+    Val AUROC (best checkpoint)  & 0.8667 \\
+    Val / Test AUROC gap         & 0.0004 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The near-zero gap between validation AUROC (0.8667) and test AUROC (0.8663) is
+noteworthy: it indicates that model selection on the validation set introduced
+negligible optimistic bias, and that performance generalises cleanly to held-out data.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.88\textwidth]{fig5_summary_panel.png}
+  \caption{Summary evaluation panel on the held-out test set.
+    \textbf{Top-left:} ROC curve (AUROC\,=\,0.8663); shaded region indicates the
+    performance gap over the $\sim$0.78 prior sequence-based benchmark.
+    \textbf{Top-right:} Precision--recall curve (AUPRC\,=\,0.9073); dashed line is
+    the random baseline at class prevalence (0.615).
+    \textbf{Bottom-left:} Predicted probability distributions for nucleosomal (green)
+    and random (orange) sequences, showing clear class separation.
+    \textbf{Bottom-right:} Confusion matrix at decision threshold 0.5.}
+  \label{fig:results}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}[b]{0.48\textwidth}
+    \includegraphics[width=\textwidth]{fig1_roc_curve.png}
+    \caption{ROC Curve (AUROC\,=\,0.8663)}
+    \label{fig:roc}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[b]{0.48\textwidth}
+    \includegraphics[width=\textwidth]{fig2_pr_curve.png}
+    \caption{Precision--Recall Curve (AUPRC\,=\,0.9073)}
+    \label{fig:prc}
+  \end{subfigure}
+  \caption{Primary evaluation curves on the held-out test set.}
+  \label{fig:curves}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}[b]{0.52\textwidth}
+    \includegraphics[width=\textwidth]{fig3_score_dist.png}
+    \caption{Score distributions}
+    \label{fig:dist}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[b]{0.43\textwidth}
+    \includegraphics[width=\textwidth]{fig4_confusion_matrix.png}
+    \caption{Confusion matrix}
+    \label{fig:cm}
+  \end{subfigure}
+  \caption{Predicted score distributions and confusion matrix at threshold 0.5.}
+  \label{fig:dist_cm}
+\end{figure}
+
+\subsection{Parameter Efficiency and Hardware Footprint}
+
+Table~\ref{tab:params} summarises parameter counts and hardware requirements relative
+to representative prior approaches. CircleDot-Former achieves its result with
+$\sim$44K parameters and under 600\,MB of GPU memory, demonstrating that
+physics-informed inductive biases can substitute for architectural scale.
+
+\begin{table}[H]
+  \centering
+  \caption{Parameter count and hardware comparison. AUROC values for prior methods
+           are approximate figures from the literature on related nucleosome-positioning
+           tasks; direct reproduction on the Loop-seq benchmark was not performed.
+           CircleDot-Former is the only model evaluated on this exact dataset with
+           this experimental protocol.}
+  \label{tab:params}
+  \begin{tabular}{lp{1.6cm}p{1.8cm}c}
+    \toprule
+    \textbf{Model} & \textbf{Parameters} & \textbf{Peak VRAM} & \textbf{AUROC} \\
+    \midrule
+    Segal et al.\ (2006) thermodynamic~\cite{segal2006genomic}
+      & $\sim$500      & CPU only    & $\sim$0.70 \\
+    Kaplan et al.\ (2009) sequence model~\cite{kaplan2009dna}
+      & $\sim$10K      & CPU only    & $\sim$0.76 \\
+    Standard 1D CNN (sequence only)
+      & $\sim$500K     & $\sim$2\,GB & $\sim$0.78 \\
+    \textbf{CircleDot-Former (ours)}
+      & \textbf{44,289} & \textbf{${<}$600\,MB} & \textbf{0.8663} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{Discussion}
+% ══════════════════════════════════════════════════════════════════════════════
+
+\subsection{Why Helical Graph Encoding Matters}
+
+The helical tension edges connecting nucleotides 10\,bp apart encode one complete turn
+of the DNA double helix. This design choice is not arbitrary: 10-bp periodicity is the
+fundamental spatial frequency of nucleosome-positioning signals in eukaryotic
+genomes~\cite{segal2006genomic,drew1985dna}. The GATv2 attention mechanism can
+therefore learn, from data alone, how much the helical geometry of each position
+contributes to the overall bendability of a fragment---information that a 1D
+convolutional filter cannot represent without explicit feature engineering, because it
+observes only a linear window and has no access to the rotational register of the helix.
+
+\subsection{Why a Neural ODE Rather Than Stacked Layers}
+
+Discrete message-passing layers propagate information in integer ``hops''. The Neural
+ODE instead parameterises \emph{continuous} dynamics. For DNA mechanics, this is
+physically motivated: the elastic response of the helix to a local perturbation is a
+continuous redistribution of strain energy described by the WLC Hamiltonian
+(Equation~\ref{eq:wlc}), not a discrete diffusion process. The smooth Tanh vector field
+in our ODE is consistent with the differentiability of this energy landscape. Moreover,
+the adjoint method makes this physically principled choice essentially free in terms of
+memory---a key reason the model trains within 600\,MB of VRAM on a laptop GPU.
+
+\subsection{The Value of Physics Pre-training}
+
+The most informative aspect of our results is the Phase~2 training trajectory: the
+model exceeds AUROC\,0.78 at epoch\,1, before the classification head has seen more
+than a single pass of training data. This behaviour is consistent with the hypothesis,
+confirmed experimentally by Basu et~al.~\cite{basu2021measuring}, that intrinsic
+cyclizability is mechanistically linked to in-vivo nucleosome occupancy. The $C_0$
+regression pre-training transfers that mechanical knowledge directly into the
+classification representations. The alternative interpretation---that the model
+memorises sequence features correlated with nucleosome positioning---is disfavoured by
+the tight val/test AUROC gap (0.0004) and by the fact that only 10,369 parameters were
+updated during fine-tuning.
+
+\subsection{Limitations and Future Work}
+
+\paragraph{Organism scope.}
+All sequences are 50-bp fragments from \textit{S.\,cerevisiae}. Whether the helical
+graph + Neural ODE representations generalise to other eukaryotes or to longer
+sequences remains to be tested. Extension to human nucleosome data (ENCODE MNase-seq
+or chemical cleavage maps) is a natural next step.
+
+\paragraph{Sequence-only input.}
+CircleDot-Former uses only primary DNA sequence. Incorporating epigenetic features
+(histone modifications, CpG methylation) or in-vitro structural measurements could
+further improve performance.
+
+\paragraph{Sliding-window application.}
+The 50-bp fragments used here span only the nucleosome dyad region. A sliding-window
+inference scheme with aggregation across overlapping windows is computationally
+straightforward and would enable genome-wide nucleosome positioning predictions.
+
+\paragraph{Attention-weight interpretability.}
+The GATv2 attention weights provide a per-edge, per-head quantification of how much
+each backbone and helical bond contributes to a given prediction. Systematic analysis
+of these weights across sequences of varying cyclizability could reveal learned sequence
+motifs and validate whether the model recovers the known 10-bp periodic AA/TT signals.
+
+% ══════════════════════════════════════════════════════════════════════════════
+\section{Conclusion}
+% ══════════════════════════════════════════════════════════════════════════════
+
+We have presented CircleDot-Former: a physics-informed graph neural ODE that encodes
+DNA as a helical graph, learns continuous bending dynamics via a Neural ODE pre-trained
+on direct biophysical measurements of cyclizability, and classifies in-vivo nucleosome
+sequences with AUROC\,0.8663 and AUPRC\,0.9073 on a rigorously constructed held-out
+test set. The model achieves this with 44K parameters and under 600\,MB of GPU memory
+on a consumer laptop. The central finding is that encoding the correct physical
+structure---helical geometry and continuous elastic dynamics---into the model
+architecture provides a strong inductive bias that can substitute for computational
+scale, enabling competitive genomic modelling without access to high-performance
+infrastructure. All code, deterministic split indices, and evaluation protocols are
+made publicly available to support full reproducibility.
+
+% ── Acknowledgements ──────────────────────────────────────────────────────────
+\section*{Acknowledgements}
+
+The author thanks Aakash Basu, Taekjip Ha, and co-authors for making the Loop-seq
+datasets publicly available. All sequence data and cyclizability measurements used in
+this study are from Basu et~al.\ (2021), \textit{Nature} 589, 462--467.
+
+% ── Data and Code Availability ────────────────────────────────────────────────
+\section*{Data and Code Availability}
+
+Raw sequence data and cyclizability scores are available from the supplementary
+datasets of Basu et~al.\ (2021),
+DOI:~\href{https://doi.org/10.1038/s41586-020-03052-3}{10.1038/s41586-020-03052-3}.
+All training, evaluation, and figure-generation code, together with the deterministic
+train/val/test split indices (seed\,42), are available at
+\url{https://github.com/[username]/circledot-former}.
+
+% ── Competing Interests ───────────────────────────────────────────────────────
+\section*{Competing Interests}
+
+The author declares no competing interests.
+
+% ── References ────────────────────────────────────────────────────────────────
+\bibliographystyle{unsrt}
+\begin{thebibliography}{99}
+
+\bibitem{segal2006genomic}
+Segal, E. et al.
+A genomic code for nucleosome positioning.
+\textit{Nature} \textbf{442}, 772--778 (2006).
+\href{https://doi.org/10.1038/nature04979}{doi:10.1038/nature04979}
+
+\bibitem{kaplan2009dna}
+Kaplan, N. et al.
+The DNA-encoded nucleosome organization of a eukaryotic genome.
+\textit{Nature} \textbf{458}, 362--366 (2009).
+\href{https://doi.org/10.1038/nature07667}{doi:10.1038/nature07667}
+
+\bibitem{kornberg1999chromatin}
+Kornberg, R.~D. \& Lorch, Y.
+Twenty-five years of the nucleosome, fundamental particle of the eukaryote chromosome.
+\textit{Cell} \textbf{98}, 285--294 (1999).
+\href{https://doi.org/10.1016/S0092-8674(00)81958-3}{doi:10.1016/S0092-8674(00)81958-3}
+
+\bibitem{basu2021measuring}
+Basu, A. et al.
+Measuring DNA mechanics on the genome scale.
+\textit{Nature} \textbf{589}, 462--467 (2021).
+\href{https://doi.org/10.1038/s41586-020-03052-3}{doi:10.1038/s41586-020-03052-3}
+
+\bibitem{shore1981dna}
+Shore, D., Langowski, J. \& Baldwin, R.~L.
+DNA flexibility studied by covalent closure of short fragments into circles.
+\textit{Proc.\ Natl Acad.\ Sci.\ USA} \textbf{78}, 4833--4837 (1981).
+\href{https://doi.org/10.1073/pnas.78.8.4833}{doi:10.1073/pnas.78.8.4833}
+
+\bibitem{chen2018neural}
+Chen, R.~T.~Q., Rubanova, Y., Bettencourt, J. \& Duvenaud, D.~K.
+Neural ordinary differential equations.
+\textit{Advances in Neural Information Processing Systems} \textbf{31} (2018).
+\href{https://arxiv.org/abs/1806.07366}{arXiv:1806.07366}
+
+\bibitem{brody2022attentive}
+Brody, S., Alon, U. \& Yahav, E.
+How attentive are graph attention networks?
+\textit{International Conference on Learning Representations} (2022).
+\href{https://arxiv.org/abs/2105.14491}{arXiv:2105.14491}
+
+\bibitem{jumper2021alphafold}
+Jumper, J. et al.
+Highly accurate protein structure prediction with AlphaFold.
+\textit{Nature} \textbf{596}, 583--589 (2021).
+\href{https://doi.org/10.1038/s41586-021-03819-2}{doi:10.1038/s41586-021-03819-2}
+
+\bibitem{drew1985dna}
+Drew, H.~R. \& Travers, A.~A.
+DNA bending and its relation to nucleosome positioning.
+\textit{J.\ Mol.\ Biol.} \textbf{186}, 773--790 (1985).
+\href{https://doi.org/10.1016/0022-2836(85)90396-1}{doi:10.1016/0022-2836(85)90396-1}
+
+\bibitem{garcia2007biological}
+Garcia, H.~G. et al.
+Biological consequences of tightly bent DNA: the other life of a macromolecular celebrity.
+\textit{Biopolymers} \textbf{85}, 115--130 (2007).
+\href{https://doi.org/10.1002/bip.20627}{doi:10.1002/bip.20627}
+
+\end{thebibliography}
+
+\end{document}

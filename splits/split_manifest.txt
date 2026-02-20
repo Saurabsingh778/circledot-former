@@ -1,0 +1,22 @@
+
+CircleDot-Former — Deterministic Data Split Manifest
+=====================================================
+Generated with SEED = 42
+
+Source files:
+  Nucleosome (pos=1) : D:\exprement_16\data\41586_2020_3052_MOESM4_ESM.txt
+  Random     (neg=0) : D:\exprement_16\data\41586_2020_3052_MOESM6_ESM.txt
+
+Total sequences      : 32,379
+  Nucleosome (+)     : 19,907
+  Random     (-)     : 12,472
+
+Split sizes:
+  TRAIN : 22,665  (13,935 pos  |  8,730 neg)
+  VAL   : 4,857   (2,986 pos  |  1,871 neg)
+  TEST  : 4,857   (2,986 pos  |  1,871 neg)
+
+Overlap checks       : PASSED (zero leakage confirmed)
+
+WARNING: TEST SET IS SEALED. Do not evaluate on test_indices.pt until
+   training is fully complete and final model is chosen.

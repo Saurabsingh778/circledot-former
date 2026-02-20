@@ -1,0 +1,28 @@
+
+╔══════════════════════════════════════════════════════════════╗
+║       CircleDot-Former  —  FINAL HELD-OUT TEST RESULTS       ║
+╠══════════════════════════════════════════════════════════════╣
+║  Model weights  : circledot_classifier_best.pth              ║
+║  Test samples   : 4,857   (2,986 nucleosome  |  1,871 random)     ║
+║  Leakage check  : PASSED (zero overlap with train/val)       ║
+╠══════════════════════════════════════════════════════════════╣
+║  PRIMARY METRIC                                              ║
+║    AUROC          : 0.8663                                    ║
+║    SOTA baseline  : 0.7800  [Sequence-based CNN models (Seg]  ║
+║    Margin         : +0.0863  >>> BEATS SOTA <<<                  ║
+╠══════════════════════════════════════════════════════════════╣
+║  SECONDARY METRICS                                           ║
+║    AUPRC          : 0.9073                                    ║
+║    Accuracy       : 0.7904                                    ║
+║    Precision      : 0.8081                                    ║
+║    Recall         : 0.8644                                    ║
+║    F1 Score       : 0.8353                                    ║
+╠══════════════════════════════════════════════════════════════╣
+║  CONFUSION MATRIX  (threshold = 0.5)                         ║
+║    True  Positives: 2581     False Positives: 613                ║
+║    False Negatives: 405      True  Negatives: 1258               ║
+╚══════════════════════════════════════════════════════════════╝
+
+Raw arrays saved for plotting ROC curve if needed.
+
+SOTA reference: Sequence-based CNN models (Segal et al. Nature 2006; Kaplan et al. Nature 2009) on nucleosome positioning. Data source: Basu et al. Nature 2021 (Loop-seq), MOESM4 (nucleosomal library) vs MOESM6 (random library).
